@@ -2,6 +2,35 @@
 version: '3.7'
 
 services:
+  wazuh.indexer:
+    image: wazuh/wazuh-indexer:4.7.0
+    hostname: wazuh.indexer
+    restart: always
+    ports:
+      - "9200:9200"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+      - ./config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem
+      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.key
+      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.pem
+      - ./config/wazuh_indexer_ssl_certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem
+      - ./config/wazuh_indexer_ssl_certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem
+      - ./config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/opensearch.yml
+      - ./config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/opensearch-security/internal_users.yml
+    deploy:
+      resources:
+        limits:
+          memory: 1.2g
+
   wazuh.manager:
     image: wazuh/wazuh-manager:4.7.0
     hostname: wazuh.manager
@@ -44,31 +73,10 @@ services:
       - ./config/wazuh_indexer_ssl_certs/wazuh.manager.pem:/etc/ssl/filebeat.pem
       - ./config/wazuh_indexer_ssl_certs/wazuh.manager-key.pem:/etc/ssl/filebeat.key
       - ./config/wazuh_cluster/wazuh_manager.conf:/wazuh-config-mount/etc/ossec.conf
-
-  wazuh.indexer:
-    image: wazuh/wazuh-indexer:4.7.0
-    hostname: wazuh.indexer
-    restart: always
-    ports:
-      - "9200:9200"
-    environment:
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      nofile:
-        soft: 65536
-        hard: 65536
-    volumes:
-      - wazuh-indexer-data:/var/lib/wazuh-indexer
-      - ./config/wazuh_indexer_ssl_certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem
-      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer-key.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.key
-      - ./config/wazuh_indexer_ssl_certs/wazuh.indexer.pem:/usr/share/wazuh-indexer/certs/wazuh.indexer.pem
-      - ./config/wazuh_indexer_ssl_certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem
-      - ./config/wazuh_indexer_ssl_certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem
-      - ./config/wazuh_indexer/wazuh.indexer.yml:/usr/share/wazuh-indexer/opensearch.yml
-      - ./config/wazuh_indexer/internal_users.yml:/usr/share/wazuh-indexer/opensearch-security/internal_users.yml
+    deploy:
+      resources:
+        limits:
+          memory: 1.0g
 
   wazuh.dashboard:
     image: wazuh/wazuh-dashboard:4.7.0
@@ -97,6 +105,134 @@ services:
     links:
       - wazuh.indexer:wazuh.indexer
       - wazuh.manager:wazuh.manager
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # --- Elastic for Cortex ---
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    container_name: elasticsearch
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  # --- Cortex (Analysis Engine) ---
+  cortex:
+    image: thehiveproject/cortex:3.1.1
+    container_name: cortex
+    restart: always
+    ports:
+      - "9001:9001"
+    environment:
+      - job.directory=/tmp/cortex-jobs
+    volumes:
+      - ./config/cortex/application.conf:/etc/cortex/application.conf
+      - cortex-data:/var/run/cortex
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - elasticsearch
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  # --- TheHive 5 (Incident Response - BDB + Lucene edition) ---
+  thehive:
+    image: strangebee/thehive:5.2
+    container_name: thehive
+    restart: always
+    ports:
+      - "9000:9000"
+    command:
+      - --no-config-db
+      - --bdb-directory
+      - /data/db
+      - --index-backend
+      - lucene
+    volumes:
+      - thehive-data:/data/db
+    deploy:
+      resources:
+        limits:
+          memory: 1.0g
+
+  # --- Shuffle SOAR Backend ---
+  shuffle-backend:
+    image: frikky/shuffle-backend:latest
+    container_name: shuffle-backend
+    restart: always
+    ports:
+      - "5001:5001"
+    environment:
+      - SHUFFLE_OPENSEARCH_URL=https://wazuh.indexer:9200
+      - SHUFFLE_OPENSEARCH_USERNAME=admin
+      - SHUFFLE_OPENSEARCH_PASSWORD=SecretPassword
+      - SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY=true
+      - SHUFFLE_BACKEND_PORT=5001
+      - SHUFFLE_ORBORUS_EXECUTION_CONCURRENCY=5
+      - SHUFFLE_APP_EXECUTION_CONCURRENCY=5
+      - SHUFFLE_LOGS_DISABLED=false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - shuffle-apps:/shuffle-apps
+    depends_on:
+      - wazuh.indexer
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # --- Shuffle SOAR Frontend ---
+  shuffle-frontend:
+    image: frikky/shuffle-frontend:latest
+    container_name: shuffle-frontend
+    restart: always
+    ports:
+      - "3000:80"
+    environment:
+      - BACKEND_URL=http://shuffle-backend:5001
+    depends_on:
+      - shuffle-backend
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # --- Shuffle SOAR Orborus ---
+  shuffle-orborus:
+    image: frikky/shuffle-orborus:latest
+    container_name: shuffle-orborus
+    restart: always
+    environment:
+      - SHUFFLE_BACKEND_PORT=5001
+      - SHUFFLE_APP_EXECUTION_CONCURRENCY=5
+      - SHUFFLE_ORBORUS_EXECUTION_CONCURRENCY=5
+      - BASE_URL=http://shuffle-backend:5001
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - shuffle-backend
+    deploy:
+      resources:
+        limits:
+          memory: 256m
 
 volumes:
   wazuh_api_configuration:
@@ -113,3 +249,7 @@ volumes:
   wazuh-indexer-data:
   wazuh-dashboard-config:
   wazuh-dashboard-custom:
+  elasticsearch-data:
+  cortex-data:
+  thehive-data:
+  shuffle-apps:
