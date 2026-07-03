@@ -1,0 +1,21 @@
+{
+  "name": "Mini SOC Stack",
+  "portsAttributes": {
+    "443": {
+      "label": "Wazuh Dashboard",
+      "visibility": "public"
+    },
+    "3000": {
+      "label": "Shuffle SOAR",
+      "visibility": "public"
+    },
+    "9000": {
+      "label": "TheHive",
+      "visibility": "public"
+    },
+    "9001": {
+      "label": "Cortex",
+      "visibility": "public"
+    }
+  }
+}
