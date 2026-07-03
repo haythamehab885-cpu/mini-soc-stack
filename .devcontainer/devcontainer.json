@@ -9,6 +9,10 @@
       "label": "Shuffle SOAR",
       "visibility": "public"
     },
+    "5001": {
+      "label": "Shuffle Backend",
+      "visibility": "public"
+    },
     "9000": {
       "label": "TheHive",
       "visibility": "public"
